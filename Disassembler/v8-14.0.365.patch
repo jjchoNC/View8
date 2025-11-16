@@ -1,0 +1,282 @@
+diff --git a/src/d8/d8.cc b/src/d8/d8.cc
+index 0c86d4f8b95..aa93b706aa2 100644
+--- a/src/d8/d8.cc
++++ b/src/d8/d8.cc
+@@ -1018,6 +1018,21 @@ bool Shell::ExecuteString(Isolate* isolate, Local<String> source,
+         ScriptCompiler::CreateCodeCache(script->GetUnboundScript());
+     StoreInCodeCache(isolate, source, cached_data);
+     delete cached_data;
++  }
++    if (options.code_cache_options ==
++      ShellOptions::CodeCacheOptions::kProduceCacheFile) {
++    // Serialize and store it in memory for the next execution.
++    ScriptCompiler::CachedData* cached_data =
++        ScriptCompiler::CreateCodeCache(script->GetUnboundScript());
++    StoreInCodeCache(isolate, source, cached_data);
++    int length = cached_data->length;
++    uint8_t* cache = new uint8_t[length];
++    memcpy(cache, cached_data->data, length);
++    // Write to file
++    FILE* fp = fopen(options.cache_file, "wb");
++    fwrite(cache, 1, length, fp);
++    fclose(fp);
++    delete cached_data;
+   }
+   if (options.compile_only) return true;
+   if (options.compile_options & ScriptCompiler::kConsumeCodeCache) {
+@@ -6024,6 +6039,12 @@ bool Shell::SetOptions(int argc, char* argv[]) {
+         fprintf(stderr, "Unknown option to --cache.\n");
+         return false;
+       }
++    } else if (FlagMatches("--cache-file", &argv[i]) ||
++               FlagWithArgMatches("--cache-file", &flag_value, argc, argv, &i)) {
++      options.compile_options = v8::ScriptCompiler::kNoCompileOptions;
++      options.code_cache_options =
++          ShellOptions::CodeCacheOptions::kProduceCacheFile;
++      options.cache_file = flag_value;
+     } else if (FlagMatches("--streaming-compile", &argv[i])) {
+       options.streaming_compile = true;
+     } else if ((FlagMatches("--no-streaming-compile", &argv[i])) ||
+diff --git a/src/d8/d8.h b/src/d8/d8.h
+index 94dcfb5a23d..1950d1dca10 100644
+--- a/src/d8/d8.h
++++ b/src/d8/d8.h
+@@ -395,7 +395,8 @@ class ShellOptions {
+   enum CodeCacheOptions {
+     kNoProduceCache,
+     kProduceCache,
+-    kProduceCacheAfterExecute
++    kProduceCacheAfterExecute,
++    kProduceCacheFile
+   };
+ 
+   ~ShellOptions() { delete[] isolate_sources; }
+@@ -470,6 +471,8 @@ class ShellOptions {
+   int num_isolates = 1;
+   DisallowReassignment<v8::ScriptCompiler::CompileOptions, true>
+       compile_options = {"cache", v8::ScriptCompiler::kNoCompileOptions};
++  DisallowReassignment<const char*> cache_file = {
++      "cache-file", nullptr};
+   DisallowReassignment<CodeCacheOptions, true> code_cache_options = {
+       "cache", CodeCacheOptions::kNoProduceCache};
+   DisallowReassignment<bool> streaming_compile = {"streaming-compile", false};
+diff --git a/src/diagnostics/objects-printer.cc b/src/diagnostics/objects-printer.cc
+index 65e694850ec..dbc7a322695 100644
+--- a/src/diagnostics/objects-printer.cc
++++ b/src/diagnostics/objects-printer.cc
+@@ -2524,7 +2524,7 @@ void SharedFunctionInfo::SharedFunctionInfoPrint(std::ostream& os) {
+   } else {
+     os << "\n - trusted_function_data: <empty>";
+   }
+-  os << "\n - untrusted_function_data: " << Brief(GetUntrustedData());
++  // os << "\n - untrusted_function_data: " << Brief(GetUntrustedData());
+   os << "\n - code (from function_data): ";
+   Isolate* isolate;
+   if (GetIsolateFromHeapObject(*this, &isolate)) {
+@@ -2532,7 +2532,7 @@ void SharedFunctionInfo::SharedFunctionInfoPrint(std::ostream& os) {
+   } else {
+     os << kUnavailableString;
+   }
+-  PrintSourceCode(os);
++  // PrintSourceCode(os);
+   // Script files are often large, thus only print their {Brief} representation.
+   os << "\n - script: " << Brief(script());
+   os << "\n - function token position: " << function_token_position();
+@@ -2553,6 +2553,11 @@ void SharedFunctionInfo::SharedFunctionInfoPrint(std::ostream& os) {
+   os << "\n - unique_id: " << unique_id();
+   os << "\n - age: " << age();
+   os << "\n";
++
++  os << "\nStart BytecodeArray\n";
++  this->GetActiveBytecodeArray(isolate)->Disassemble(os);
++  os << "\nEnd BytecodeArray\n";
++  os << std::flush;
+ }
+ 
+ void SharedFunctionInfoWrapper::SharedFunctionInfoWrapperPrint(
+@@ -3612,6 +3617,33 @@ void HeapObject::Print(Tagged<Object> obj, std::ostream& os) {
+ 
+ void HeapObject::HeapObjectShortPrint(std::ostream& os) {
+   PtrComprCageBase cage_base = GetPtrComprCageBase();
++  // #pragma GCC diagnostic push
++  // #pragma GCC diagnostic ignored "-Wshadow"
++  // Isolate* isolate = nullptr;
++  // if (!GetIsolateFromHeapObject(*this, &isolate) || isolate == nullptr) {
++  //   os << "<unknown>";
++  //   return;
++  // }
++
++  // // Now that we have the isolate, we can get the ReadOnlyRoots.
++  // ReadOnlyRoots roots(isolate);
++  // // Get the map of the current object using the correct API.
++  // Tagged<Map> map_of_this_object = this->map(cage_base);
++
++  // // Add an extra-safe check: A valid map pointer should not be null.
++  // if (map_of_this_object.ptr() == kNullAddress) {
++  //   os << "<unknown>";
++  //   return;
++  // }
++
++  // // Check if the map's map is the meta_map. This is a strong indication
++  // // that the object we are trying to print is valid.
++  // if (map_of_this_object->map(cage_base) != roots.meta_map()) {
++  //   os << "<unknown>";
++  //   return;
++  // }
++  // // --- END OF OUR MODIFICATION ---
++
+   os << AsHex::Address(this->ptr()) << " ";
+ 
+   if (IsString(*this, cage_base)) {
+@@ -3629,6 +3661,24 @@ void HeapObject::HeapObjectShortPrint(std::ostream& os) {
+     return;
+   }
+ 
++  // Print array literal members instead of only "<AsmWasmData>"
++  // if (map(cage_base)->instance_type() == ASM_WASM_DATA_TYPE) {
++  //   os << "<ArrayBoilerplateDescription> ";
++  //   // ArrayBoilerplateDescription::cast(*this)
++  //   //     ->constant_elements()
++  //   //
++  //   Cast<ArrayBoilerplateDescription>(*this)->ArrayBoilerplateDescriptionPrint(os);
++  //   return;
++  // }
++
++  // if (map(cage_base)->instance_type() == ASM_WASM_DATA_TYPE) {
++  //   os << "<ArrayBoilerplateDescription> ";
++  //   Cast<ArrayBoilerplateDescription>(*this)
++  //       ->constant_elements()
++  //       ->HeapObjectShortPrint(os);
++  //   return;
++  // }
++
+   InstanceType instance_type = map(cage_base)->instance_type();
+ 
+   // Skip invalid trusted objects. Technically it'd be fine to still handle
+@@ -3732,14 +3782,28 @@ void HeapObject::HeapObjectShortPrint(std::ostream& os) {
+       break;
+     case FIXED_ARRAY_TYPE:
+       os << "<FixedArray[" << Cast<FixedArray>(*this)->length() << "]>";
++      os << "\nStart FixedArray\n";
++      // FixedArray::cast(*this)->FixedArrayPrint(os);
++      Cast<FixedArray>(*this)->FixedArrayPrint(os);
++      os << "\nEnd FixedArray\n";
+       break;
+     case OBJECT_BOILERPLATE_DESCRIPTION_TYPE:
+       os << "<ObjectBoilerplateDescription["
+          << Cast<ObjectBoilerplateDescription>(*this)->capacity() << "]>";
++      os << "\nStart ObjectBoilerplateDescription\n";
++      // ObjectBoilerplateDescription::cast(*this)
++      //     ->ObjectBoilerplateDescriptionPrint(os);
++      Cast<ObjectBoilerplateDescription>(*this)
++          ->ObjectBoilerplateDescriptionPrint(os);
++      os << "\nEnd ObjectBoilerplateDescription\n";
+       break;
+     case FIXED_DOUBLE_ARRAY_TYPE:
+       os << "<FixedDoubleArray[" << Cast<FixedDoubleArray>(*this)->length()
+          << "]>";
++      os << "\nStart FixedDoubleArray\n";
++      // FixedDoubleArray::cast(*this)->FixedDoubleArrayPrint(os);
++      Cast<FixedDoubleArray>(*this)->FixedDoubleArrayPrint(os);
++      os << "\nEnd FixedDoubleArray\n";
+       break;
+     case BYTE_ARRAY_TYPE:
+       os << "<ByteArray[" << Cast<ByteArray>(*this)->length() << "]>";
+@@ -3857,6 +3921,9 @@ void HeapObject::HeapObjectShortPrint(std::ostream& os) {
+       } else {
+         os << "<SharedFunctionInfo>";
+       }
++      os << "\nStart SharedFunctionInfo\n";
++      shared->SharedFunctionInfoPrint(os);
++      os << "\nEnd SharedFunctionInfo\n";
+       break;
+     }
+     case JS_MESSAGE_OBJECT_TYPE:
+diff --git a/src/objects/string.cc b/src/objects/string.cc
+index 55e5642becd..3988c0ac45e 100644
+--- a/src/objects/string.cc
++++ b/src/objects/string.cc
+@@ -608,12 +608,12 @@ void String::StringShortPrint(StringStream* accumulator) {
+   accumulator->Add("<String[%u]: ", len);
+   accumulator->Add(PrefixForDebugPrint());
+ 
+-  if (len > kMaxShortPrintLength) {
+-    accumulator->Add("...<truncated>>");
+-    accumulator->Add(SuffixForDebugPrint());
+-    accumulator->Put('>');
+-    return;
+-  }
++  // if (len > kMaxShortPrintLength) {
++  //   accumulator->Add("...<truncated>>");
++  //   accumulator->Add(SuffixForDebugPrint());
++  //   accumulator->Put('>');
++  //   return;
++  // }
+ 
+   PrintUC16(accumulator, 0, len);
+   accumulator->Add(SuffixForDebugPrint());
+diff --git a/src/snapshot/code-serializer.cc b/src/snapshot/code-serializer.cc
+index e251e0784df..abf1a55c9cd 100644
+--- a/src/snapshot/code-serializer.cc
++++ b/src/snapshot/code-serializer.cc
+@@ -532,6 +532,11 @@ MaybeDirectHandle<SharedFunctionInfo> CodeSerializer::Deserialize(
+     return MaybeDirectHandle<SharedFunctionInfo>();
+   }
+ 
++   std::cout << "\nStart SharedFunctionInfo\n";
++   result->SharedFunctionInfoPrint(std::cout);
++   std::cout << "\nEnd SharedFunctionInfo\n";
++   std::cout << std::flush;
++
+   // Check whether the newly deserialized data should be merged into an
+   // existing Script from the Isolate compilation cache. If so, perform
+   // the merge in a single-threaded manner since this deserialization was
+@@ -765,10 +770,11 @@ SerializedCodeData::SerializedCodeData(const std::vector<uint8_t>* payload,
+ SerializedCodeSanityCheckResult SerializedCodeData::SanityCheck(
+     uint32_t expected_ro_snapshot_checksum,
+     uint32_t expected_source_hash) const {
+-  SerializedCodeSanityCheckResult result =
+-      SanityCheckWithoutSource(expected_ro_snapshot_checksum);
+-  if (result != SerializedCodeSanityCheckResult::kSuccess) return result;
+-  return SanityCheckJustSource(expected_source_hash);
++  // SerializedCodeSanityCheckResult result =
++  //     SanityCheckWithoutSource(expected_ro_snapshot_checksum);
++  // if (result != SerializedCodeSanityCheckResult::kSuccess) return result;
++  // return SanityCheckJustSource(expected_source_hash);
++  return SerializedCodeSanityCheckResult::kSuccess;
+ }
+ 
+ SerializedCodeSanityCheckResult SerializedCodeData::SanityCheckJustSource(
+diff --git a/src/snapshot/deserializer.cc b/src/snapshot/deserializer.cc
+index 232edf68b2d..60843f79765 100644
+--- a/src/snapshot/deserializer.cc
++++ b/src/snapshot/deserializer.cc
+@@ -350,7 +350,7 @@ Deserializer<IsolateT>::Deserializer(IsolateT* isolate,
+ #ifdef DEBUG
+   num_api_references_ = GetNumApiReferences(isolate);
+ #endif  // DEBUG
+-  CHECK_EQ(magic_number_, SerializedData::kMagicNumber);
++  // CHECK_EQ(magic_number_, SerializedData::kMagicNumber);
+ }
+ 
+ template <typename IsolateT>
+@@ -1148,6 +1148,19 @@ int Deserializer<IsolateT>::ReadReadOnlyHeapRef(uint8_t data,
+   uint32_t chunk_offset = source_.GetUint30();
+ 
+   ReadOnlySpace* read_only_space = isolate()->heap()->read_only_space();
++  if (chunk_index >= read_only_space->pages().size()) {
++    // If index is out of bounds, write a safe value (the_hole) and continue.
++    // This will likely result in a "bad" object, but prevents the crash.
++
++    // --- FIX IS HERE ---
++    // We need to dereference the Handle<> to get the Tagged<> object.
++    Tagged<Hole> the_hole = *isolate()->factory()->the_hole_value();
++
++    return WriteHeapPointer(slot_accessor, the_hole,
++                            GetAndResetNextReferenceDescriptor());
++  }
++  // --- END OF OUR MODIFICATION ---
++
+   ReadOnlyPageMetadata* page = read_only_space->pages()[chunk_index];
+   Address address = page->OffsetToAddress(chunk_offset);
+   Tagged<HeapObject> heap_object = HeapObject::FromAddress(address);
