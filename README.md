@@ -45,6 +45,13 @@
 <pre><code>python view8.py input_file output_file -e v8_opcode decompiled</code></pre>
 <p>By default, the format used is <code>decompiled</code>.</p>
 
+### Generate V8 Cache
+To generate a v8 cache from a .js file, use the `--cache-file` flag on d8:
+
+```sh
+d8 --cache-file=main.bin main.js
+```
+
 <h3>VersionDetector.exe</h3>
 <p>The V8 bytecode version is stored as a hash at the beginning of the file. Below are the options available for <code>VersionDetector.exe</code>:</p>
 <ul>
